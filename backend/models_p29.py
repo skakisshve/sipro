@@ -70,6 +70,7 @@ class LeadWaManual(BaseModel):
     """Catat chat WA yang dilakukan DI LUAR sistem (HP pribadi) — wajib bukti foto."""
     note: str = Field(min_length=3, max_length=1000)
     evidence_file_ids: List[str] = Field(min_length=1, max_length=3)
+    task_id: Optional[str] = None   # tugas Work Hub (contact/follow-up) yang ikut ditutup
 
     @field_validator("evidence_file_ids")
     @classmethod

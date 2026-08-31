@@ -47,6 +47,7 @@ class TaskCreate(BaseModel):
     related_entity_id: Optional[str] = None
     assigned_to: Optional[str] = None
     due_date: Optional[str] = None
+    jobdesk_code: Optional[str] = None   # pilih dari katalog jobdesk, bukan nilai bebas
 
 
 class TaskUpdate(BaseModel):

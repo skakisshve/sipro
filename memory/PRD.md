@@ -264,3 +264,9 @@ Bahasa produk & komunikasi: **Indonesia**.
 - Frontend: panel WA lead punya seksi "Catat manual + bukti foto"; pesan manual tampil di thread dengan badge MANUAL + link bukti.
 - Teruji iteration_109: backend 10/10 pytest, frontend E2E pass. Regression suite: backend/tests/test_wa_manual_p29c.py.
 - Backlog kecil: substitusi variabel template WA selain {{nama}} (mis. {{date}}) masih literal.
+
+## 2026-06 — Fase 29c: Variabel Template WA + WA Manual di Work Hub + Sinkron Form Tugas
+- engine.py: render_wa_body + wa_template_vars — {{date}} terisi jadwal survey terdekat (format Indonesia WIB, fallback "(waktu akan dikonfirmasi)"); berlaku di WA lead, Inbox, dan playbook/automation.
+- wa/manual menerima task_id: tugas contact/follow_up terkait lead ditutup done/approved dengan bukti note+foto; blok WA manual ada di TaskDetailSheet Work Hub.
+- POST /work/tasks tervalidasi: jobdesk_code harus ada di katalog (mewarisi bukti/verifikasi/SLA/divisi), related_entity dicek ke record nyata (404/400); CreateTaskDialog kini pilih jobdesk & lead dari dropdown, bukan nilai bebas.
+- Teruji iteration_110 (frontend 100%) + fix defect jobdesk palsu → 22/22 pytest (tests/test_p110_wa_vars_tasks.py + test_wa_manual_p29c.py).

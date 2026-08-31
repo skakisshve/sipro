@@ -29,6 +29,10 @@ OPEN_STATES = wh.OPEN_STATES          # open, in_progress, snoozed, submitted
 ACTIVE_STATES = wh.ACTIVE_STATES      # open, in_progress, snoozed
 DONE_ALIASES = ["done", "completed"]   # 'completed' = data warisan sebelum Fase 29
 
+# Kaitan tugas manual DIVALIDASI pada data (dulu boleh nilai bebas → tugas yatim).
+RELATED_COLLECTIONS = {"lead": db.leads, "deal": db.deals, "customer": db.customers,
+                       "unit": db.units, "project": db.projects}
+
 
 def _bucket(tasks: list) -> dict:
     return wh.bucket(tasks)
@@ -168,23 +172,56 @@ async def list_tasks(scope: str = None, filter: str = None, type: str = None,
 @router.post("/tasks")
 async def create_task(payload: TaskCreate,
                       user: dict = Depends(require_permission("work_tasks", "create"))):
-    """Buat tugas manual. Divisi diturunkan dari penerima agar masuk papan yang benar."""
+    """Buat tugas manual. Divisi diturunkan dari penerima agar masuk papan yang benar.
+
+    Fase 29c: sinkron dengan proses bisnis — kaitan record & jobdesk dipilih dari data
+    (divalidasi), bukan nilai bebas; memilih jobdesk mewarisi bukti/verifikasi/SLA-nya.
+    """
     org = user.get("org_id", ORG_ID)
     ts = now_iso()
+    rel_type, rel_id = payload.related_entity_type, payload.related_entity_id
+    if bool(rel_type) != bool(rel_id):
+        raise HTTPException(status_code=400, detail=(
+            "Kaitan data tidak lengkap: jenis dan record terkait harus dipilih bersama."))
+    if rel_type:
+        coll = RELATED_COLLECTIONS.get(rel_type)
+        if coll is None:
+            raise HTTPException(status_code=400, detail=(
+                f"Jenis kaitan '{rel_type}' tidak dikenal. Pilihan: "
+                f"{', '.join(sorted(RELATED_COLLECTIONS))}."))
+        if not await coll.find_one({"id": rel_id, "org_id": org}, {"_id": 0, "id": 1}):
+            raise HTTPException(status_code=404, detail=(
+                "Record terkait tidak ditemukan — pilih dari daftar, bukan nilai bebas."))
+    jd = None
+    if payload.jobdesk_code:
+        import jobdesk_catalog as cat
+        known = payload.jobdesk_code in cat.BY_CODE or await db.jobdesk_templates.find_one(
+            {"org_id": org, "code": payload.jobdesk_code}, {"_id": 0, "id": 1})
+        if not known:
+            raise HTTPException(status_code=400, detail=(
+                "Jobdesk tidak ditemukan di katalog — pilih dari daftar jobdesk divisi."))
+        jd = await wh.jobdesk(org, payload.jobdesk_code)
     assignee = payload.assigned_to or user.get("email")
     target = await wh.user_by_email(org, assignee)
     if payload.assigned_to and not target:
         raise HTTPException(status_code=400, detail="Pengguna tujuan tidak ditemukan")
-    division = wh.division_of(target) or wh.division_of(user)
+    division = (jd or {}).get("division") or wh.division_of(target) or wh.division_of(user)
+    due = payload.due_date
+    if not due and jd and jd.get("sla_hours"):
+        due = wh._sla_iso(jd.get("sla_hours"))
     doc = {
         "id": new_id(), "org_id": org, "title": payload.title,
-        "description": payload.description, "type": payload.type, "status": "open",
-        "priority": payload.priority, "related_entity_type": payload.related_entity_type,
-        "related_entity_id": payload.related_entity_id,
-        "assigned_to": assignee, "assigned_by": user.get("email"), "due_date": payload.due_date,
-        "sla_due_at": payload.due_date, "sla_breached": False, "source_event": None,
-        "auto_generated": False, "division": division, "jobdesk_code": None,
-        "proof_kind": "note", "verify_mode": "none", "review": "none", "proof": [],
+        "description": payload.description or (jd or {}).get("description"),
+        "type": (jd or {}).get("type") or payload.type, "status": "open",
+        "priority": payload.priority, "related_entity_type": rel_type,
+        "related_entity_id": rel_id,
+        "assigned_to": assignee, "assigned_by": user.get("email"), "due_date": due,
+        "sla_due_at": due, "sla_breached": False, "source_event": None,
+        "auto_generated": False, "division": division,
+        "jobdesk_code": (jd or {}).get("code"),
+        "proof_kind": (jd or {}).get("proof_kind", "note"),
+        "verify_mode": (jd or {}).get("verify_mode", "none"),
+        "review": "none", "proof": [], "link": (jd or {}).get("link"),
         "outcome": None, "created_by": user.get("email"), "created_at": ts, "updated_at": ts,
     }
     doc.update(await clock.patch_for("task", doc.get("status", "open"), org_id=org, at=ts))

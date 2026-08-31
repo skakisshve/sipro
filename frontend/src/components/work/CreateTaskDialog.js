@@ -27,22 +27,46 @@ export default function CreateTaskDialog({ division, onDone }) {
   const { options } = useReference();
   const [open, setOpen] = useState(false);
   const [members, setMembers] = useState([]);
+  const [jobdesks, setJobdesks] = useState([]);
+  const [leads, setLeads] = useState([]);
   const [form, setForm] = useState({
     title: "", description: "", type: "todo", priority: "medium", assigned_to: "", due: "",
+    jobdesk_code: "", lead_id: "",
   });
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    if (!division) return;
     try {
-      const res = await api.get(`/work/divisions/${division}/members`);
-      setMembers(res.data.data || []);
-    } catch { /* biarkan kosong; penerima bisa dibiarkan default (diri sendiri) */ }
+      if (division) {
+        const res = await api.get(`/work/divisions/${division}/members`);
+        setMembers(res.data.data || []);
+      }
+      const jd = await api.get(`/work/jobdesks${division ? `?division=${division}` : ""}`);
+      setJobdesks(jd.data.data || []);
+      const ld = await api.get("/leads?limit=100&sort=created_at&direction=desc");
+      setLeads(ld.data.data || []);
+    } catch { /* biarkan kosong; form tetap bisa dipakai ad-hoc */ }
   }, [division]);
 
   useEffect(() => { if (open) load(); }, [open, load]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const jdSelected = jobdesks.find((j) => j.code === form.jobdesk_code) || null;
+
+  const pickJobdesk = (code) => {
+    if (code === "adhoc") {
+      setForm((f) => ({ ...f, jobdesk_code: "" }));
+      return;
+    }
+    const jd = jobdesks.find((j) => j.code === code);
+    setForm((f) => ({
+      ...f, jobdesk_code: code,
+      title: jd?.title || f.title,
+      type: jd?.type || f.type,
+      priority: jd?.priority || f.priority,
+    }));
+  };
 
   const submit = async () => {
     if (form.title.trim().length < 3) { toast.error("Judul tugas minimal 3 karakter."); return; }
@@ -53,10 +77,13 @@ export default function CreateTaskDialog({ division, onDone }) {
         type: form.type, priority: form.priority,
         assigned_to: form.assigned_to || null,
         due_date: form.due ? new Date(form.due).toISOString() : null,
+        jobdesk_code: form.jobdesk_code || null,
+        related_entity_type: form.lead_id ? "lead" : null,
+        related_entity_id: form.lead_id || null,
       });
       toast.success("Tugas dibuat.");
       setOpen(false);
-      setForm({ title: "", description: "", type: "todo", priority: "medium", assigned_to: "", due: "" });
+      setForm({ title: "", description: "", type: "todo", priority: "medium", assigned_to: "", due: "", jobdesk_code: "", lead_id: "" });
       onDone && onDone();
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Gagal membuat tugas.");
@@ -79,9 +106,50 @@ export default function CreateTaskDialog({ division, onDone }) {
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-1.5">
+            <Label>Jobdesk (dari katalog)</Label>
+            <Select value={form.jobdesk_code || "adhoc"} onValueChange={pickJobdesk}>
+              <SelectTrigger data-testid={WORK.createTaskJobdesk}><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="adhoc">Ad-hoc — di luar jobdesk</SelectItem>
+                {jobdesks.map((j) => (
+                  <SelectItem key={j.code} value={j.code}>{j.code} — {j.title}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {jdSelected ? (
+              <p className="rounded-md bg-secondary/60 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                Mengikuti aturan jobdesk: bukti <b>{jdSelected.proof_kind || "note"}</b> ·
+                verifikasi <b>{jdSelected.verify_mode || "none"}</b>
+                {jdSelected.sla_hours ? <> · SLA <b>{jdSelected.sla_hours} jam</b></> : null}
+              </p>
+            ) : (
+              <p className="text-[11px] text-muted-foreground">
+                Pilih jobdesk agar tugas mengikuti proses bisnis (bukti & verifikasi),
+                atau biarkan ad-hoc.
+              </p>
+            )}
+          </div>
+          <div className="space-y-1.5">
             <Label htmlFor="nt-title">Judul</Label>
             <Input id="nt-title" value={form.title} onChange={(e) => set("title", e.target.value)}
               placeholder="mis. Siapkan materi open house Sabtu" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Kaitkan ke lead (opsional)</Label>
+            <Select value={form.lead_id || "none"}
+              onValueChange={(v) => set("lead_id", v === "none" ? "" : v)}>
+              <SelectTrigger data-testid={WORK.createTaskRelatedLead}>
+                <SelectValue placeholder="Tanpa kaitan" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Tanpa kaitan</SelectItem>
+                {leads.map((l) => (
+                  <SelectItem key={l.id} value={l.id}>
+                    {l.name}{l.phone ? ` — ${l.phone}` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">

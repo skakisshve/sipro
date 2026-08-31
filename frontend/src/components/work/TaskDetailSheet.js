@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ExternalLink, HardHat, Play, Send, ShieldCheck, RotateCcw, UserCog, Info } from "lucide-react";
+import { ExternalLink, HardHat, Play, Send, ShieldCheck, RotateCcw, UserCog, Info, Camera } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import {
@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import StatusPill from "@/components/patterns/StatusPill";
 import RefLabel from "@/components/patterns/RefLabel";
 import PhotoUploader from "@/components/patterns/PhotoUploader";
+import EvidenceUploader from "@/components/patterns/EvidenceUploader";
 import AssignTaskDialog from "@/components/work/AssignTaskDialog";
 import { formatDateTimeWIB, dueLabel } from "@/utils/formatters";
 import { photoSrc } from "@/utils/photoSrc";
@@ -41,6 +42,8 @@ export default function TaskDetailSheet({ taskId, open, onOpenChange, onChanged 
   const [loading, setLoading] = useState(false);
   const [note, setNote] = useState("");
   const [photos, setPhotos] = useState([]);
+  const [waNote, setWaNote] = useState("");
+  const [waEvidence, setWaEvidence] = useState([]);
   const [reason, setReason] = useState("");
   const [showReject, setShowReject] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
@@ -53,6 +56,7 @@ export default function TaskDetailSheet({ taskId, open, onOpenChange, onChanged 
       const res = await api.get(`/work/tasks/${taskId}`);
       setData(res.data.data);
       setNote(""); setPhotos([]); setReason(""); setShowReject(false);
+      setWaNote(""); setWaEvidence([]);
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Gagal memuat detail tugas.");
     } finally { setLoading(false); }
@@ -84,6 +88,8 @@ export default function TaskDetailSheet({ taskId, open, onOpenChange, onChanged 
   const canSubmit = !buildItem && data?.can_work
     && ["open", "in_progress", "snoozed"].includes(t?.status);
   const canVerify = !buildItem && data?.can_verify && t?.status === "submitted";
+  const canWaManual = canSubmit && t?.related_entity_type === "lead" && t?.related_entity_id
+    && ["contact", "follow_up"].includes(t?.type);
   const due = t?.due_date ? dueLabel(t.due_date) : null;
 
   return (
@@ -189,6 +195,35 @@ export default function TaskDetailSheet({ taskId, open, onOpenChange, onChanged 
                   <Button size="sm" data-testid={WORK.taskBuildOpenBtn}
                     onClick={() => navigate(t.link || "/construction?tab=board")}>
                     <HardHat className="mr-1.5 h-4 w-4" /> Buka & ajukan hasil
+                  </Button>
+                </div>
+              ) : null}
+
+              {canWaManual ? (
+                <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/50 p-3">
+                  <p className="flex items-center gap-1.5 text-sm font-semibold text-amber-900">
+                    <Camera className="h-4 w-4" /> Chat lewat WA pribadi (di luar sistem)?
+                  </p>
+                  <p className="text-[11px] text-amber-900/80">
+                    Catat di sini dengan tangkapan layar percakapan sebagai bukti — tugas
+                    ini langsung ditutup tervalidasi, chat masuk ke thread WA lead, dan
+                    kontak pertama tercatat bila belum ada.
+                  </p>
+                  <Textarea data-testid={WORK.taskWaManualNote} rows={2} value={waNote}
+                    onChange={(e) => setWaNote(e.target.value)}
+                    placeholder="Ringkasan chat, mis. Sudah di-follow-up via WA pribadi, minta jadwal survey Sabtu" />
+                  <EvidenceUploader value={waEvidence} onChange={setWaEvidence}
+                    ownerType="lead_wa_manual" ownerId={t.related_entity_id} max={3}
+                    accept="image/*" testId={WORK.taskWaManualEvidence}
+                    hint="hanya foto/tangkapan layar percakapan · maks 8MB · disimpan utuh sebagai bukti."
+                    label="Lampirkan tangkapan layar percakapan WA" />
+                  <Button size="sm" variant="outline" className="w-full"
+                    data-testid={WORK.taskWaManualBtn}
+                    disabled={busy || !waNote.trim() || !waEvidence.length}
+                    onClick={() => act(() => api.post(`/leads/${t.related_entity_id}/wa/manual`, {
+                      note: waNote.trim(), evidence_file_ids: waEvidence, task_id: taskId,
+                    }), "Chat WA manual tercatat — tugas ditutup dengan bukti.")}>
+                    <Camera className="mr-1.5 h-4 w-4" /> Catat WA Manual & Tutup Tugas
                   </Button>
                 </div>
               ) : null}

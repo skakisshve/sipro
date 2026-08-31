@@ -16,7 +16,7 @@ import slik as slik
 import workhub as wh
 from core_utils import due_in, new_id, now_iso, serialize_doc
 from db import db, ORG_ID
-from engine import add_activity, dispatch_pending, emit
+from engine import add_activity, dispatch_pending, emit, render_wa_body, wa_template_vars
 from models_p29 import LeadDisposition, LeadStageOverride, LeadWaManual
 from models_p30 import SlikPrescreen
 from rbac import require_permission, is_scoped_sales
@@ -176,8 +176,7 @@ async def send_lead_wa(lead_id: str, payload: MessageCreate,
     body = template["body"] if template else (payload.body or "").strip()
     if not body:
         raise HTTPException(status_code=400, detail="Isi pesan tidak boleh kosong.")
-    body = (body.replace("{{nama}}", lead.get("name") or "")
-                .replace("{{name}}", lead.get("name") or ""))
+    body = render_wa_body(body, await wa_template_vars(lead))
     msg = {
         "id": new_id(), "org_id": org, "conversation_id": conv["id"], "direction": "out",
         "body": body, "sender": user.get("email"), "is_template": bool(template),
@@ -224,6 +223,16 @@ async def log_manual_wa(lead_id: str, payload: LeadWaManual,
     if any(not str(f.get("content_type") or "").startswith("image/") for f in files):
         raise HTTPException(status_code=400, detail=(
             "Bukti wajib berupa FOTO/tangkapan layar percakapan (bukan PDF/berkas lain)."))
+    task = None
+    if payload.task_id:
+        task = await db.tasks.find_one({"id": payload.task_id, "org_id": org,
+                                        "related_entity_type": "lead",
+                                        "related_entity_id": lead_id}, {"_id": 0})
+        if not task:
+            raise HTTPException(status_code=404, detail=(
+                "Tugas tidak ditemukan atau tidak terkait dengan lead ini."))
+        if task.get("status") in ("done", "cancelled"):
+            raise HTTPException(status_code=400, detail="Tugas ini sudah ditutup.")
     ts = now_iso()
     conv = await db.conversations.find_one({"org_id": org, "lead_id": lead_id}, {"_id": 0},
                                           sort=[("last_message_at", -1)])
@@ -256,12 +265,34 @@ async def log_manual_wa(lead_id: str, payload: LeadWaManual,
     fresh = await lc.mark_first_contact(lead, actor=user.get("email"),
                                         channel="whatsapp_manual",
                                         note=f"WA manual (bukti foto): {note[:80]}")
+    closed_task = None
+    if task:
+        fresh_task = await db.tasks.find_one({"id": task["id"]}, {"_id": 0})
+        if fresh_task.get("status") not in ("done", "cancelled"):
+            proof = list(fresh_task.get("proof") or [])
+            proof.append({"kind": "note", "at": ts,
+                          "value": f"WA manual (di luar sistem): {note[:500]}"})
+            proof.extend({"kind": "photo", "value": f, "at": ts} for f in ids)
+            upd = {"status": "done", "review": "approved", "proof": proof,
+                   "outcome": f"WA manual berbukti foto: {note[:200]}",
+                   "completed_at": ts, "completed_by": user.get("email"),
+                   "verified_by": "system", "verified_at": ts,
+                   "verify_note": f"Bukti foto WA manual ({len(ids)} lampiran) tervalidasi.",
+                   "updated_at": ts}
+            await db.tasks.update_one({"id": task["id"]}, {"$set": upd})
+            closed_task = {**fresh_task, **upd}
+        else:
+            closed_task = fresh_task
+        await wh.log_task_activity(
+            closed_task, f"Tugas ditutup lewat catatan WA manual berbukti ({len(ids)} foto).",
+            user.get("email"))
     await emit("message.sent", "conversation", conv["id"],
                {"lead_id": lead_id, "mode": "manual"}, org_id=org)
     await dispatch_pending()
     reqs = await lc.requirements(fresh)
     return {"data": {"message": serialize_doc(msg), "lead": serialize_doc(fresh),
                      "conversation_id": conv["id"], "mode": "manual",
+                     "task": serialize_doc(closed_task),
                      "next_actions": lc.next_actions(fresh, reqs)},
             "message_text": ("Chat WA manual tercatat dengan bukti foto — kontak pertama "
                              "terverifikasi tanpa integrasi WhatsApp.")}

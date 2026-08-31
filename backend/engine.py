@@ -296,15 +296,56 @@ async def _find_template(org, *, code=None, tid=None):
     return None
 
 
+# ----------------------------- WA template rendering -----------------------------
+_ID_MONTHS = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli",
+              "Agustus", "September", "Oktober", "November", "Desember"]
+_ID_DAYS = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+
+
+def _wib_label(iso: str) -> str:
+    from datetime import datetime, timedelta
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00")) + timedelta(hours=7)
+    except (TypeError, ValueError):
+        return str(iso or "-")
+    return (f"{_ID_DAYS[dt.weekday()]}, {dt.day} {_ID_MONTHS[dt.month - 1]} {dt.year} "
+            f"pukul {dt:%H.%M} WIB")
+
+
+def render_wa_body(body: str, variables: dict) -> str:
+    for k, v in (variables or {}).items():
+        body = body.replace("{{%s}}" % k, str(v))
+    return body
+
+
+async def wa_template_vars(lead: dict) -> dict:
+    """Nilai placeholder WA dari DATA lead — dulu hanya {{nama}}/{{name}} yang diganti
+    sehingga {{date}} terkirim mentah ke pelanggan. {{date}} = jadwal survey terdekat."""
+    org = lead.get("org_id", ORG_ID)
+    appt = await db.appointments.find_one(
+        {"org_id": org, "lead_id": lead["id"], "status": "scheduled",
+         "scheduled_at": {"$gte": now_iso()}},
+        {"_id": 0, "scheduled_at": 1}, sort=[("scheduled_at", 1)])
+    if not appt:
+        appt = await db.appointments.find_one(
+            {"org_id": org, "lead_id": lead["id"], "scheduled_at": {"$ne": None}},
+            {"_id": 0, "scheduled_at": 1}, sort=[("scheduled_at", -1)])
+    date = _wib_label(appt["scheduled_at"]) if appt else "(waktu akan dikonfirmasi)"
+    name = lead.get("name") or ""
+    return {"name": name, "nama": name, "date": date}
+
+
 async def send_template_message(conv, template, org, variables=None, actor="automation"):
     """SIMULATION: append an OUTBOUND template message to the conversation (no external send).
     Templates bypass the 24h session-window rule (that's their WA purpose)."""
     if not conv or not template:
         return None
     ts = now_iso()
-    body = template.get("body", "")
-    for k, v in (variables or {}).items():
-        body = body.replace("{{%s}}" % k, str(v))
+    body = render_wa_body(template.get("body", ""), variables)
+    if "{{" in body and conv.get("lead_id"):
+        lead = await db.leads.find_one({"id": conv["lead_id"]}, {"_id": 0})
+        if lead:
+            body = render_wa_body(body, await wa_template_vars(lead))
     msg = {
         "id": new_id(), "org_id": org, "conversation_id": conv["id"], "direction": "out",
         "body": body, "sender": actor, "is_template": True,

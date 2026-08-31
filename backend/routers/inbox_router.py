@@ -97,6 +97,11 @@ async def send_message(conv_id: str, payload: MessageCreate,
             detail="Sesi 24 jam tertutup. Gunakan template WA (pra-approved) untuk memulai percakapan.")
 
     body = template["body"] if template else payload.body
+    if template and conv.get("lead_id"):
+        from engine import render_wa_body, wa_template_vars
+        _lead_tpl = await db.leads.find_one({"id": conv["lead_id"]}, {"_id": 0})
+        if _lead_tpl:
+            body = render_wa_body(body, await wa_template_vars(_lead_tpl))
     msg = {
         "id": new_id(), "org_id": org, "conversation_id": conv_id, "direction": direction,
         "body": body, "sender": ("contact" if direction == "in" else user.get("email")),
