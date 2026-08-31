@@ -19,7 +19,7 @@ const MAX_MB = 8;
 export default function EvidenceUploader({
   value = [], onChange, ownerType = "generic", ownerId = null, max = 3,
   testId = "evidence-input", label = "Lampirkan bukti", accept = "image/*,application/pdf",
-  names = {},
+  names = {}, hint = null,
 }) {
   const [busy, setBusy] = useState(false);
   const [meta, setMeta] = useState({});
@@ -80,8 +80,7 @@ export default function EvidenceUploader({
         {busy ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
       </div>
       <p className="text-[11px] text-muted-foreground">
-        {value.length}/{max} lampiran · gambar atau PDF · maks {MAX_MB}MB · disimpan utuh
-        (tanpa kompresi) agar sah sebagai bukti.
+        {value.length}/{max} lampiran · {hint || `gambar atau PDF · maks ${MAX_MB}MB · disimpan utuh (tanpa kompresi) agar sah sebagai bukti.`}
       </p>
       {value.length ? (
         <div className="flex flex-wrap gap-1.5">

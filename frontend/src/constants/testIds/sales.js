@@ -55,6 +55,11 @@ export const LEADS = {
   waWindow: "lead-wa-window-badge",
   waSimulateIn: "lead-wa-simulate-inbound",
   waMessage: "lead-wa-message",
+  waManualToggle: "lead-wa-manual-toggle",
+  waManualNote: "lead-wa-manual-note",
+  waManualEvidence: "lead-wa-manual-evidence-input",
+  waManualSubmit: "lead-wa-manual-submit",
+  waManualBadge: "lead-wa-manual-badge",
   // ---------------- Fase 30a — pra-skrining BI/SLIK berbukti ----------------
   slikPanel: "lead-slik-panel",
   slikStatus: "lead-slik-status",

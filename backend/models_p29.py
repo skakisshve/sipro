@@ -4,7 +4,7 @@ File terpisah karena `models.py` sudah dekat batas compliance (≤800 baris).
 """
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 import reference as ref
 
@@ -64,6 +64,17 @@ class LeadDisposition(BaseModel):
     disposition: str
     note: Optional[str] = Field(default=None, max_length=500)
     intent_tags: List[str] = []
+
+
+class LeadWaManual(BaseModel):
+    """Catat chat WA yang dilakukan DI LUAR sistem (HP pribadi) — wajib bukti foto."""
+    note: str = Field(min_length=3, max_length=1000)
+    evidence_file_ids: List[str] = Field(min_length=1, max_length=3)
+
+    @field_validator("evidence_file_ids")
+    @classmethod
+    def _dedupe(cls, v):
+        return list(dict.fromkeys(v))
 
 
 class LeadStageOverride(BaseModel):

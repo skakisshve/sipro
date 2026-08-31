@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Send, MessageSquare, Clock, ShieldCheck, ArrowDownLeft } from "lucide-react";
+import { Send, MessageSquare, Clock, ShieldCheck, ArrowDownLeft, Camera, ImageIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,6 +9,8 @@ import {
 } from "@/components/ui/select";
 import { formatDateTimeWIB } from "@/utils/formatters";
 import { PanelStateView } from "@/components/patterns/StateViews";
+import EvidenceUploader from "@/components/patterns/EvidenceUploader";
+import { fileUrl } from "@/utils/photoSrc";
 import api from "@/services/apiClient";
 import { classifyRequestError } from "@/utils/panelLoad";
 import { LEADS } from "@/constants/testIds";
@@ -31,6 +33,8 @@ export default function LeadWaPanel({ leadId, onChanged }) {
   const [tmpl, setTmpl] = useState("");
   const [busy, setBusy] = useState(false);
   const [inbound, setInbound] = useState("");
+  const [manualNote, setManualNote] = useState("");
+  const [manualEvidence, setManualEvidence] = useState([]);
   const endRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -63,6 +67,25 @@ export default function LeadWaPanel({ leadId, onChanged }) {
       onChanged && onChanged();
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Gagal mengirim pesan.");
+    } finally { setBusy(false); }
+  };
+
+  const submitManual = async () => {
+    if (!manualNote.trim()) { toast.error("Tulis ringkasan chat WA-nya."); return; }
+    if (!manualEvidence.length) {
+      toast.error("Bukti foto wajib: lampirkan tangkapan layar percakapan.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await api.post(`/leads/${leadId}/wa/manual`,
+        { note: manualNote.trim(), evidence_file_ids: manualEvidence });
+      toast.success(res.data.message_text || "Chat WA manual tercatat dengan bukti.");
+      setManualNote(""); setManualEvidence([]);
+      await load();
+      onChanged && onChanged();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal mencatat chat WA manual.");
     } finally { setBusy(false); }
   };
 
@@ -115,11 +138,31 @@ export default function LeadWaPanel({ leadId, onChanged }) {
         {msgs.length ? msgs.map((m) => (
           <div key={m.id} data-testid={LEADS.waMessage}
             className={cn("max-w-[85%] rounded-lg px-2.5 py-1.5 text-xs",
-              m.direction === "out" ? "ml-auto bg-emerald-600 text-white"
+              m.direction === "out"
+                ? (m.mode === "manual" ? "ml-auto border border-amber-300 bg-amber-50 text-amber-950"
+                  : "ml-auto bg-emerald-600 text-white")
                 : "bg-card border")}>
+            {m.mode === "manual" ? (
+              <p data-testid={LEADS.waManualBadge}
+                className="mb-1 inline-flex items-center gap-1 rounded bg-amber-200/80 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
+                <Camera className="h-3 w-3" /> MANUAL · di luar sistem
+              </p>
+            ) : null}
             <p className="whitespace-pre-wrap">{m.body}</p>
+            {(m.evidence_file_ids || []).length ? (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {m.evidence_file_ids.map((fid, i) => (
+                  <a key={fid} href={fileUrl(fid)} target="_blank" rel="noreferrer"
+                    className="inline-flex items-center gap-1 rounded border border-amber-300 bg-white px-1.5 py-0.5 text-[10px] text-amber-900 underline-offset-2 hover:underline">
+                    <ImageIcon className="h-3 w-3" /> Bukti {i + 1}
+                  </a>
+                ))}
+              </div>
+            ) : null}
             <p className={cn("mt-0.5 text-[10px]",
-              m.direction === "out" ? "text-emerald-50/80" : "text-muted-foreground")}>
+              m.direction === "out"
+                ? (m.mode === "manual" ? "text-amber-800/70" : "text-emerald-50/80")
+                : "text-muted-foreground")}>
               {formatDateTimeWIB(m.created_at)}{m.is_template ? " · template" : ""}
             </p>
           </div>
@@ -159,6 +202,33 @@ export default function LeadWaPanel({ leadId, onChanged }) {
           <Send className="mr-1.5 h-4 w-4" /> Kirim WhatsApp
         </Button>
       </div>
+
+      <details className="rounded-lg border border-amber-200 bg-amber-50/50 p-2">
+        <summary data-testid={LEADS.waManualToggle}
+          className="cursor-pointer text-[11px] font-medium text-amber-900">
+          Chat lewat WA pribadi (di luar sistem)? Catat manual + bukti foto
+        </summary>
+        <div className="mt-2 space-y-2">
+          <p className="text-[10px] text-muted-foreground">
+            Jalur bypass selama integrasi WhatsApp resmi belum terpasang: chat tetap lewat
+            HP pribadi, lalu dicatat di sini dengan tangkapan layar sebagai bukti. Efeknya
+            sama dengan kirim dari sistem — kontak pertama tercatat & tahap lead naik.
+          </p>
+          <Textarea data-testid={LEADS.waManualNote} rows={2} value={manualNote}
+            onChange={(e) => setManualNote(e.target.value)}
+            placeholder="Ringkasan chat, mis. Sudah dihubungi via WA pribadi, tertarik tipe 45, minta jadwal survey Sabtu" />
+          <EvidenceUploader value={manualEvidence} onChange={setManualEvidence}
+            ownerType="lead_wa_manual" ownerId={leadId} max={3} accept="image/*"
+            testId={LEADS.waManualEvidence}
+            hint="hanya foto/tangkapan layar percakapan · maks 8MB · disimpan utuh sebagai bukti."
+            label="Lampirkan tangkapan layar percakapan WA" />
+          <Button size="sm" className="w-full" variant="outline"
+            data-testid={LEADS.waManualSubmit} onClick={submitManual}
+            disabled={busy || !manualNote.trim() || !manualEvidence.length}>
+            <Camera className="mr-1.5 h-4 w-4" /> Catat Chat WA Manual (dengan bukti)
+          </Button>
+        </div>
+      </details>
 
       <details className="rounded-lg border bg-card p-2 shadow-[var(--shadow-card)]">
         <summary className="cursor-pointer text-[11px] text-muted-foreground">

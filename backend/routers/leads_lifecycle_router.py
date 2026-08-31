@@ -17,7 +17,7 @@ import workhub as wh
 from core_utils import due_in, new_id, now_iso, serialize_doc
 from db import db, ORG_ID
 from engine import add_activity, dispatch_pending, emit
-from models_p29 import LeadDisposition, LeadStageOverride
+from models_p29 import LeadDisposition, LeadStageOverride, LeadWaManual
 from models_p30 import SlikPrescreen
 from rbac import require_permission, is_scoped_sales
 from models import MessageCreate
@@ -201,6 +201,70 @@ async def send_lead_wa(lead_id: str, payload: MessageCreate,
                      "conversation_id": conv["id"], "mode": "simulation",
                      "next_actions": lc.next_actions(fresh, reqs)},
             "message_text": "Pesan WhatsApp terkirim (mode simulasi) & kontak pertama tercatat."}
+
+
+@router.post("/{lead_id}/wa/manual")
+async def log_manual_wa(lead_id: str, payload: LeadWaManual,
+                        user: dict = Depends(require_permission("leads", "update"))):
+    """Catat chat WA yang dilakukan DI LUAR sistem (HP pribadi) — WAJIB bukti foto.
+
+    Jalur bypass selama integrasi WhatsApp resmi belum terpasang: staf tetap chat lewat
+    WA pribadi, lalu mencatatnya di sini dengan tangkapan layar percakapan sebagai bukti.
+    Efek lifecycle SAMA dengan kirim WA dari sistem: kontak pertama tercatat (sekali),
+    tahap acquisition → nurturing naik, dan tugas "hubungi lead" tertutup berbukti.
+    """
+    lead = await _lead(lead_id, user)
+    org = lead["org_id"]
+    ids = payload.evidence_file_ids
+    files = await db.files.find({"id": {"$in": ids}, "org_id": org, "is_deleted": False},
+                                {"_id": 0, "id": 1, "content_type": 1}).to_list(len(ids))
+    if len(files) != len(set(ids)):
+        raise HTTPException(status_code=404, detail=(
+            "Sebagian file bukti tidak ditemukan. Unggah ulang tangkapan layarnya."))
+    if any(not str(f.get("content_type") or "").startswith("image/") for f in files):
+        raise HTTPException(status_code=400, detail=(
+            "Bukti wajib berupa FOTO/tangkapan layar percakapan (bukan PDF/berkas lain)."))
+    ts = now_iso()
+    conv = await db.conversations.find_one({"org_id": org, "lead_id": lead_id}, {"_id": 0},
+                                          sort=[("last_message_at", -1)])
+    if not conv:
+        conv = {
+            "id": new_id(), "org_id": org, "channel": "whatsapp",
+            "contact_phone": lead.get("phone"), "contact_name": lead.get("name"),
+            "lead_id": lead_id, "owner": lead.get("assigned_to") or user.get("email"),
+            "status": "active", "mode": "manual", "unread": 0,
+            "last_message_at": None, "last_direction": None, "window_expires_at": None,
+            "created_at": ts, "updated_at": ts,
+        }
+        await db.conversations.insert_one(dict(conv))
+    note = payload.note.strip()
+    msg = {
+        "id": new_id(), "org_id": org, "conversation_id": conv["id"], "direction": "out",
+        "body": note, "sender": user.get("email"), "is_template": False,
+        "mode": "manual", "evidence_file_ids": ids, "created_at": ts,
+    }
+    await db.messages.insert_one(dict(msg))
+    await db.conversations.update_one({"id": conv["id"]}, {"$set": {
+        "last_message_at": ts, "last_direction": "out", "status": "active",
+        "unanswered_task_at": None, "updated_at": ts}})
+    await add_activity(entity_type="lead", entity_id=lead_id, type="system",
+                       body=(f"WA manual (di luar sistem) dicatat dengan {len(ids)} bukti "
+                             f"foto: {note[:120]}"),
+                       actor=user.get("email"), org_id=org,
+                       meta={"conversation_id": conv["id"], "evidence_file_ids": ids,
+                             "mode": "manual"})
+    fresh = await lc.mark_first_contact(lead, actor=user.get("email"),
+                                        channel="whatsapp_manual",
+                                        note=f"WA manual (bukti foto): {note[:80]}")
+    await emit("message.sent", "conversation", conv["id"],
+               {"lead_id": lead_id, "mode": "manual"}, org_id=org)
+    await dispatch_pending()
+    reqs = await lc.requirements(fresh)
+    return {"data": {"message": serialize_doc(msg), "lead": serialize_doc(fresh),
+                     "conversation_id": conv["id"], "mode": "manual",
+                     "next_actions": lc.next_actions(fresh, reqs)},
+            "message_text": ("Chat WA manual tercatat dengan bukti foto — kontak pertama "
+                             "terverifikasi tanpa integrasi WhatsApp.")}
 
 
 @router.post("/{lead_id}/wa/inbound-demo")

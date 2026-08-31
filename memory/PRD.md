@@ -258,3 +258,9 @@ Bahasa produk & komunikasi: **Indonesia**.
 - Environment di-setup ulang dari repo gabavacafa/sipro (deps terpasang, .env dipulihkan + JWT_SECRET, seed otomatis jalan).
 - Retest BI MetricDetailDialog (iteration_108): 6/6 target PASS, smoke 15/15 dialog, 0 console error. Defect iteration_107 (breakdown chart jadi series) terkonfirmasi FIXED.
 - Catatan LOW opsional: label breakdown SLS-01 duplikat ("Tipe 45/90" x3) — soal data seed, bukan logika chart.
+
+## 2026-06 — Verifikasi WA Manual (bypass integrasi)
+- Gerbang lifecycle yang butuh WA = kontak pertama (acquisition→nurturing). Ditambahkan jalur manual: POST /api/leads/{id}/wa/manual — chat via WA pribadi dicatat WAJIB dengan foto bukti (screenshot), efek sama dengan kirim WA in-system (kontak pertama, naik tahap, tutup tugas kontak).
+- Frontend: panel WA lead punya seksi "Catat manual + bukti foto"; pesan manual tampil di thread dengan badge MANUAL + link bukti.
+- Teruji iteration_109: backend 10/10 pytest, frontend E2E pass. Regression suite: backend/tests/test_wa_manual_p29c.py.
+- Backlog kecil: substitusi variabel template WA selain {{nama}} (mis. {{date}}) masih literal.
