@@ -23,15 +23,28 @@ import { useReference } from "@/context/ReferenceContext";
  * Endpoint `POST /api/work/tasks` sudah ada sejak fase awal tetapi TIDAK PERNAH dipakai UI,
  * sehingga supervisor tidak punya cara menugaskan pekerjaan di luar jobdesk otomatis.
  */
+const REL_TYPES = [
+  { value: "lead", label: "Lead", endpoint: "/leads?limit=100&sort=created_at&direction=desc",
+    toLabel: (r) => `${r.name}${r.phone ? ` — ${r.phone}` : ""}` },
+  { value: "deal", label: "Deal / Booking", endpoint: "/deals?limit=100",
+    toLabel: (r) => `${r.lead_name || "Deal"}${r.price ? ` — Rp ${Number(r.price).toLocaleString("id-ID")}` : ""}` },
+  { value: "unit", label: "Unit", endpoint: "/units?limit=200",
+    toLabel: (r) => `${r.code || r.no || r.id}${r.block ? ` — Blok ${r.block}` : ""}` },
+  { value: "customer", label: "Customer", endpoint: "/customers?limit=100",
+    toLabel: (r) => `${r.name}${r.email ? ` — ${r.email}` : ""}` },
+  { value: "project", label: "Proyek", endpoint: "/projects?limit=50",
+    toLabel: (r) => `${r.name}${r.code ? ` (${r.code})` : ""}` },
+];
+
 export default function CreateTaskDialog({ division, onDone }) {
   const { options } = useReference();
   const [open, setOpen] = useState(false);
   const [members, setMembers] = useState([]);
   const [jobdesks, setJobdesks] = useState([]);
-  const [leads, setLeads] = useState([]);
+  const [relRecords, setRelRecords] = useState({});
   const [form, setForm] = useState({
     title: "", description: "", type: "todo", priority: "medium", assigned_to: "", due: "",
-    jobdesk_code: "", lead_id: "",
+    jobdesk_code: "", rel_type: "", rel_id: "",
   });
   const [busy, setBusy] = useState(false);
 
@@ -43,8 +56,6 @@ export default function CreateTaskDialog({ division, onDone }) {
       }
       const jd = await api.get(`/work/jobdesks${division ? `?division=${division}` : ""}`);
       setJobdesks(jd.data.data || []);
-      const ld = await api.get("/leads?limit=100&sort=created_at&direction=desc");
-      setLeads(ld.data.data || []);
     } catch { /* biarkan kosong; form tetap bisa dipakai ad-hoc */ }
   }, [division]);
 
@@ -68,8 +79,24 @@ export default function CreateTaskDialog({ division, onDone }) {
     }));
   };
 
+  const pickRelType = async (v) => {
+    const type = v === "none" ? "" : v;
+    setForm((f) => ({ ...f, rel_type: type, rel_id: "" }));
+    if (type && !relRecords[type]) {
+      try {
+        const cfg = REL_TYPES.find((r) => r.value === type);
+        const res = await api.get(cfg.endpoint);
+        setRelRecords((c) => ({ ...c, [type]: res.data.data || [] }));
+      } catch { setRelRecords((c) => ({ ...c, [type]: [] })); }
+    }
+  };
+
   const submit = async () => {
     if (form.title.trim().length < 3) { toast.error("Judul tugas minimal 3 karakter."); return; }
+    if (form.rel_type && !form.rel_id) {
+      toast.error("Pilih record terkaitnya dari daftar.");
+      return;
+    }
     setBusy(true);
     try {
       await api.post("/work/tasks", {
@@ -78,12 +105,12 @@ export default function CreateTaskDialog({ division, onDone }) {
         assigned_to: form.assigned_to || null,
         due_date: form.due ? new Date(form.due).toISOString() : null,
         jobdesk_code: form.jobdesk_code || null,
-        related_entity_type: form.lead_id ? "lead" : null,
-        related_entity_id: form.lead_id || null,
+        related_entity_type: form.rel_type || null,
+        related_entity_id: form.rel_id || null,
       });
       toast.success("Tugas dibuat.");
       setOpen(false);
-      setForm({ title: "", description: "", type: "todo", priority: "medium", assigned_to: "", due: "", jobdesk_code: "", lead_id: "" });
+      setForm({ title: "", description: "", type: "todo", priority: "medium", assigned_to: "", due: "", jobdesk_code: "", rel_type: "", rel_id: "" });
       onDone && onDone();
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Gagal membuat tugas.");
@@ -135,21 +162,35 @@ export default function CreateTaskDialog({ division, onDone }) {
               placeholder="mis. Siapkan materi open house Sabtu" />
           </div>
           <div className="space-y-1.5">
-            <Label>Kaitkan ke lead (opsional)</Label>
-            <Select value={form.lead_id || "none"}
-              onValueChange={(v) => set("lead_id", v === "none" ? "" : v)}>
-              <SelectTrigger data-testid={WORK.createTaskRelatedLead}>
-                <SelectValue placeholder="Tanpa kaitan" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">Tanpa kaitan</SelectItem>
-                {leads.map((l) => (
-                  <SelectItem key={l.id} value={l.id}>
-                    {l.name}{l.phone ? ` — ${l.phone}` : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label>Kaitkan ke data (opsional)</Label>
+            <div className="grid grid-cols-2 gap-2">
+              <Select value={form.rel_type || "none"} onValueChange={pickRelType}>
+                <SelectTrigger data-testid={WORK.createTaskRelatedType}>
+                  <SelectValue placeholder="Tanpa kaitan" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Tanpa kaitan</SelectItem>
+                  {REL_TYPES.map((r) => (
+                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={form.rel_id || undefined} disabled={!form.rel_type}
+                onValueChange={(v) => set("rel_id", v)}>
+                <SelectTrigger data-testid={WORK.createTaskRelatedRecord}>
+                  <SelectValue placeholder={form.rel_type ? "Pilih record" : "Pilih jenis dulu"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {(relRecords[form.rel_type] || []).map((r) => {
+                    const cfg = REL_TYPES.find((c) => c.value === form.rel_type);
+                    return <SelectItem key={r.id} value={r.id}>{cfg.toLabel(r)}</SelectItem>;
+                  })}
+                  {form.rel_type && (relRecords[form.rel_type] || []).length === 0 ? (
+                    <div className="px-2 py-1.5 text-xs text-muted-foreground">Tidak ada data.</div>
+                  ) : null}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
